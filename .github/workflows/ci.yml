@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  pull_request:
+    paths:
+      - '**/PKGBUILD'
+      - '**/*.install'
+      - '**/*.patch'
+      - '**/*.desktop'
+      - '**/*.service'
+      - '**/*.timer'
+      - '**/*.sysusers'
+      - '**/*.tmpfiles'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/publish.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - '**/PKGBUILD'
+      - '**/*.install'
+      - '**/*.patch'
+      - '**/*.desktop'
+      - '**/*.service'
+      - '**/*.timer'
+      - '**/*.sysusers'
+      - '**/*.tmpfiles'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/publish.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    name: Discover PKGBUILDs
+    runs-on: ubuntu-latest
+
+    outputs:
+      packages: ${{ steps.find.outputs.packages }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Find package directories
+        id: find
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          packages="$(find packages -name PKGBUILD -printf '%h\n' | sort | jq -R -s -c 'split("\n")[:-1]')"
+
+          if [ "$packages" = "[]" ]; then
+            echo "::error::No PKGBUILD files found under packages/"
+            exit 1
+          fi
+
+          echo "packages=$packages" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.package }}
+    needs: discover
+    runs-on: ubuntu-latest
+
+    container:
+      image: archlinux:base-devel
+
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.discover.outputs.packages) }}
+
+    steps:
+      - name: Install base tooling
+        run: |
+          pacman -Syu --noconfirm --needed git sudo
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare makepkg user
+        run: |
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+          chmod 0440 /etc/sudoers.d/builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Build package
+        working-directory: ${{ matrix.package }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t package_deps < <(sudo -u builder bash -lc 'source PKGBUILD; printf "%s\n" "${depends[@]}" "${makedepends[@]}"')
+
+          installable_deps=()
+          for dep in "${package_deps[@]}"; do
+            dep="${dep%%[<>=]*}"
+            dep="${dep%%:*}"
+            [ -n "$dep" ] || continue
+
+            if pacman -Si "$dep" >/dev/null 2>&1; then
+              installable_deps+=("$dep")
+            else
+              echo "Skipping dependency not found in enabled pacman repos: $dep"
+            fi
+          done
+
+          if [ "${#installable_deps[@]}" -gt 0 ]; then
+            pacman -S --noconfirm --needed "${installable_deps[@]}"
+          fi
+
+          sudo -u builder makepkg --nodeps --noconfirm --skippgpcheck
+
+      - name: Collect package files
+        id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          safe_name="$(printf '%s' "${{ matrix.package }}" | tr '/[:space:]' '--')"
+
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          find "${{ matrix.package }}" -maxdepth 1 -type f -name '*.pkg.tar.zst' -exec cp -v {} "$GITHUB_WORKSPACE/artifacts/" \;
+
+          echo "artifact_name=$safe_name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ steps.collect.outputs.artifact_name }}
+          path: artifacts/*.pkg.tar.zst
+          if-no-files-found: error
