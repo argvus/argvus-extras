@@ -30,7 +30,6 @@ packages/argvus-snappy-switcher/PKGBUILD
 
 ## Related Repositories
 
-- [`argvus-pkgbuild`](https://github.com/argvus/argvus-pkgbuild)
 - [`packages`](https://github.com/argvus/packages)
 
 ## License
