@@ -26,7 +26,7 @@ packages/argvus-snappy-switcher/PKGBUILD
 ## Documentation
 
 - Development workflow: [DEVELOPMENT.md](DEVELOPMENT.md)
-- Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Contribution guide: [CONTRIBUTING.md](https://github.com/argvus/.github/blob/main/CONTRIBUTING.md)
 
 ## Related Repositories
 
